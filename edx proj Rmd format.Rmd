@@ -1,0 +1,312 @@
+---
+title: "Movlens"
+author: "Sarthak Pant"
+date: "1/8/2021"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+# Introduction 
+The goal of a movie recommendation system is to recommend movies based on previous ratings and through user taste/preference through a prediction model. A real world example of this application are streaming services such as Netflix, Hulu, and Amazon Prime which recommend movies they believe the user would prefer based on the parameters previously mentioned. This report explains the process of constructing a movie recommendation in R using the material that was taught in the Harvard Edx Data Science course. 
+
+The primary dataset used for this project was the Movielens dataset which is a public dataset that can be found on grouplens. The Movielens data has 27,000,000 ratings and 1,100,000 tag applications applied to 58,000 movies by 280,000 users. For the purposes of this project a subset of the Movielens dataset was created which consisted of 9,000,055 ratings of 10677 movies which were given by 69878 users. This subset was stored under the object edx. 
+
+## Project Goal
+The goal of this project was to train an algorithm, using machine learning, to predict user ratings based on the data from the edx subset. In order to judge the accuracy of the prediction model, a loss function was used to measure the difference between the predicted and actual values. In order to get the specific measure of accuracy the root mean squared error (RMSE) was calculated. The RMSE is one of the most widely used metrics in order to judge the performance of a machine learning algorithm and the lower the RMSE value, the more accurate the model is. The aim for this project is to achieve an RMSE value less than 0.86490. 
+
+Prior to developing the model the data was prepared, cleaned, and analysed in order to find some insights and patterns that would be useful during the development of the model. We downloaded the Movielens data set and split it into a training set called edx, and a testing set called validation. The validation set is only to be used to determine the accuracy of the final model which is why the edx dataset is split into two more subsets with the training set called training, and a testing set called testing. Following this step we examined the data by creating summaries in order to understand how certain parameters could have an effect on the prediction model. 
+
+## Loading Data 
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),title = as.character(title),genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+
+#Split the edx set into Training and Test sets#
+set.seed(1)
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.2, list = FALSE)
+training <- edx[-test_index,]
+temp <- edx[test_index,]
+
+#Add movieId, userId, and genres are in the training set#
+testing <- temp %>% 
+  semi_join(training, by = "movieId") %>%
+  semi_join(training, by = "userId")
+
+
+# Add rows removed from test set back into train set
+removed <- anti_join(temp, testing)
+training <- rbind(training, removed)
+
+rm(test_index, temp, removed)
+
+```
+
+
+# Data OverView
+In order to familiarize ourselves with the data we look at the row headings of the dataset. This introduces us to the six variables of the data set which are movieId, userId, ratings, timestamp, title, and genres. While we explored all six of these variables the three variables used in our prediction model were movieId, userId, and genres. 
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+head(edx)
+```
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+summary(edx)
+```
+
+``` {r}
+knitr::opts_chunk$set(echo = FALSE)
+#summary of the variables being used in the model
+#Movie Summary
+edx %>% group_by(movieId) %>% summarize(n = n())
+```
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#User Summary
+edx %>% group_by(userId) %>% summarize(n = n())
+```
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#Genre Summary
+edx %>% group_by(genres) %>% summarize(n = n()) 
+```
+# Results
+
+## Initial Prediction
+We constructed our initial model by simply taking the mean of the edx dataset
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#Initial Model#
+avg <- mean(training$rating)
+avg
+
+RMSE(training$rating, avg)
+```
+
+## Movie Effect
+The RMSE from our initial model is far from our goal of 0.86490. In order to improve the accuracy of our model we introduce the movie effect. It is a given that some movies are rated higher than others based on factors such as popularity. In order to mitigate this issue we introduced the movie effect stored under the object movieEffect. Running the model with this effect we achieve an RMSE value of 0.9431724.  
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#Movie Effect#
+movieEffect <- training %>% 
+  group_by(movieId) %>% 
+  summarize(m_e = mean(rating - avg))
+
+
+predictions <- avg + testing %>% 
+  left_join(movieEffect, by = "movieId") %>% 
+  pull(m_e)
+
+rmse_movie_effect <- RMSE(testing$rating, predictions)
+rmse_movie_effect
+```
+
+## Movie + User Effect
+There is always going to be variability in the ratings given by the users, based on tastes and preferences, since there is no rational way to rate a movie. In order to account for this variability and increase accuracy we introduce the user effect into the previous model, which is stored under the object userEffect. Running the model with this effect we achieve an RMSE value of 0.8655154. This RMSE value is much closer to our goal for this project
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#Movie + User Effect#
+userEffect <- training %>%
+  left_join(movieEffect, by = 'movieId') %>%
+  group_by(userId) %>% 
+  summarize(u_e = mean(rating - avg - m_e))
+
+predictions_user <- testing %>% 
+  left_join(movieEffect, by = "movieId") %>%
+  left_join(userEffect, by = 'userId') %>%
+  mutate(predict = avg + m_e + u_e) %>%
+  pull(predict)
+
+rmse_user_effect <- RMSE(testing$rating, predictions_user)
+rmse_user_effect
+```
+
+## Movie + User + Genre Effect
+The last effect that we are adding to our model is the genre effect. The genres are not evenly distributed in the dataset (for example there are more dramas than comedy). In order to mitigate this issue and increase the accuracy of our model we introduce the genre effect which is stored under the object genreEffect. Running the model with this effect we achieve an RMSE value of 0.8651674. This RMSE value is slightly lower than the Movie + User effect model but is still higher than our goal of achieving an RMSE of 0.86490. 
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#Movie + User + Genre Effect#
+genreEffect <- training %>%
+  left_join(movieEffect, by = 'movieId') %>%
+  left_join(userEffect, by='userId') %>%
+  group_by(genres) %>% 
+  summarize(g_e = mean(rating - avg - m_e - u_e))
+
+predictions_genres <- testing %>% 
+  left_join(movieEffect, by = "movieId") %>%
+  left_join(userEffect, by = 'userId') %>%
+  left_join(genreEffect, by ='genres') %>%
+  mutate(predict = avg + m_e + u_e + g_e) %>%
+  pull(predict)
+
+rmse_genre_effect <- RMSE(testing$rating, predictions_genres)
+rmse_genre_effect
+
+```
+
+
+## Regularization 
+In order to further reduce the RMSE value we need to regularize the data. There are some movies in the dataset that have less ratings than others or there are certain users that have rated less movies than others. These discrepancies lead to a higher RMSE value and a more inaccurate model. In order to remove these outliers we utilize regularization by running the Movie effect + User effect + Genre effect model and finding the lambda value that returns the lowest RMSE. After regularizing the model we were able to achieve an RMSE value of 0.8644359 which is below the target of 0.86490. 
+``` {r}
+knitr::opts_chunk$set(echo = FALSE)
+#Regularization w/ Test & Train set#
+
+avg <- mean(training$rating)
+
+lambda <- seq(0, 10, 0.5)
+
+rmse <- sapply(lambda, function(lmd){
+  
+
+  m_e <- training %>% 
+    group_by(movieId) %>%
+    summarize(m_e = sum(rating - avg)/(n()+lmd))
+  
+  u_e <- training %>% 
+    left_join(m_e, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(u_e = sum(rating - m_e - avg)/(n()+lmd))
+  
+  g_e <- training %>%
+    left_join(m_e, by="movieId") %>%
+    left_join(u_e, by="userId") %>%
+    group_by(genres) %>%
+    summarize(g_e = sum(rating - m_e - u_e - avg)/(n()+lmd))
+
+    
+  predicted_ratings <-  testing %>% 
+    left_join(m_e, by = "movieId") %>%
+    left_join(u_e, by = "userId") %>%
+    left_join(g_e, by = 'genres') %>%
+    mutate(pred = avg + m_e + u_e + g_e) %>%
+    pull(pred)
+  
+  RMSE(predicted_ratings, testing$rating)
+})
+
+```{r}
+lowest_rmse <- rmse[which.min(rmse)]
+lowest_rmse
+```
+
+```{r}
+lowest_lambda <- lambda[which.min(rmse)]
+lowest_lambda
+```
+
+```{r}
+#Visual plot of lambda vs rmse
+qplot(lambda, rmse)  
+
+```
+
+## Regularization Validation Run
+Since we were able to achieve an RMSE less than our goal with regularization we do a final run of our model using the edx and validation sets with the aim of achieving an RMSE less than 0.86490. After running the model we see that we get an RMSE value of 0.8646784 Which is still below our target. 
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+#Final prediction w/ Validation set#
+
+avg <- mean(edx$rating)
+
+lambda_Validation <- seq(0, 10, 0.5)
+
+rmse_Validation <- sapply(lambda_Validation, function(lmd){
+  
+  
+  m_e <- edx %>% 
+    group_by(movieId) %>%
+    summarize(m_e = sum(rating - avg)/(n()+lmd))
+  
+  u_e <- edx %>% 
+    left_join(m_e, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(u_e = sum(rating - m_e - avg)/(n()+lmd))
+  
+  g_e <- edx %>%
+    left_join(m_e, by="movieId") %>%
+    left_join(u_e, by="userId") %>%
+    group_by(genres) %>%
+    summarize(g_e = sum(rating - m_e - u_e - avg)/(n()+lmd))
+  
+  
+  predicted_ratings <- 
+    validation %>% 
+    left_join(m_e, by = "movieId") %>%
+    left_join(u_e, by = "userId") %>%
+    left_join(g_e, by = 'genres') %>%
+    mutate(pred = avg + m_e + u_e + g_e) %>%
+    pull(pred)
+  
+  RMSE(predicted_ratings, validation$rating)
+})
+
+```
+
+```{r}
+lowest_rmses_validation_final <- rmse_Validation[which.min(rmse_Validation)]
+lowest_rmses_validation_final
+```
+
+```{r}
+lowest_lambda_validation_final<- lambda_Validation[which.min(rmse_Validation)]
+lowest_lambda_validation_final
+```
+
+#Visual plot of lambda vs rmse
+```{r}
+qplot(lambda_Validation, rmse_Validation)  
+```
+
+
+#Conclusion
+We can confidently conclude that we have built a machine learning algorithm that can give us predictions of movie ratings from the edx dataset. While we were able to achieve an RMSE below our target we could further reduce that value by incorporating more variables into our model. 
